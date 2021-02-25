@@ -1,3 +1,4 @@
 def solution(n, k):
-    ### YOUR CODE HERE ###
-    return
+    A = k // n
+    B = k % n
+    return A, B
