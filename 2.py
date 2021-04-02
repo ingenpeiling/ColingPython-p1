@@ -16,7 +16,8 @@ class FileReader:
                 with open(fname, 'r') as old_file:
                     for line in old_file:
                         new_file.write(line)
-        return new_file
+        final = FileReader('new_file.txt')
+        return final
 
     def read(self):
         try:
