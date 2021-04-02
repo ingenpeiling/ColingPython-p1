@@ -1,4 +1,19 @@
+# версия после подсказки (короче и меньше вложенных if)
 def solution(arr):
+    max_elements = 1
+    curr_rep = 1
+    prev_element = arr[0]
+    for element in arr[1:]:
+        if element == prev_element:
+            curr_rep += 1
+            max_elements = max(max_elements, curr_rep)
+        else:
+            curr_rep = 1
+        prev_element = element        
+    return max_elements
+
+# версия, изначально написанная мной
+def solution_old(arr):
     count = 0
     repeated = []
     options = [1]
@@ -16,8 +31,4 @@ def solution(arr):
     result = max(options)
     return result
 
-# мне кажется, это неизящное решение,
-# но хотя бы работает. как написать
-# с меньшим числом вложенных if -
-# пока не знаю.
 
