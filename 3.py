@@ -1,204 +1,128 @@
-# Возможно, этот код гораздо сложнее, чем мог бы быть, это попытка реализовать с нуля наивный байесовский классификатор.
-# Здесь - немного усовершенствованная версия, с назначением статических весов (внутри функции char_probability).
-# Предыдущая версия без весов работала стабильно, выдавала около 80% точности.
-# А здесь почему-то при вызове an.predict('на', rev_mod, tag_list, tag_probs) одной строкой все работает хорошо, ответ PREP.
-# Но при последующем запуске an.evaluate('pos_data_test.txt', rev_mod, tag_list, tag_probs) и выводе списка ошибок показывает,
-# что "на" - NOUN (как было в версии без весов).
-# Если после этого вернуться и запустить an.predict('на', rev_mod, tag_list, tag_probs) еще раз, то он тоже выдаст NOUN.
-# Как будто какой-то сбой внутри evaluate не дает учитывать веса? Не могу понять, где ошибка.
+# Не исправляла старое, написала заново. Теперь все проще, берем слово, находим его самое длинное окончание в словаре
+# и выдаем самую частотную часть речи для этого окончания.
+# Точность 85.7% при оценке на тестовых данных open corpora
 
 from corus import load_corpora
 import tqdm
 from collections import defaultdict
+import pickle
 
-path = 'annot.opcorpora.xml.byfile.zip'
-records = load_corpora(path)
+def main():    
+    
+    # загружаем корпус, здесь же считаем, сколько всего строк (num_lines)
+    path = 'annot.opcorpora.xml.byfile.zip'
+    records = load_corpora(path)
+    num_lines = 0
 
-with open('pos_data.txt', 'w', encoding='utf8') as f:
-    for rec in tqdm.tqdm(records):
-        for par in rec.pars:
-            for sent in par.sents:
-                for token in sent.tokens:
-                    f.write(f'{token.text} {token.forms[0].grams[0]}\n')
+    with open('pos_data.txt', 'w', encoding='utf8') as f:
+        for rec in tqdm.tqdm(records):
+            for par in rec.pars:
+                for sent in par.sents:
+                    for token in sent.tokens:
+                        num_lines += 1
+                        f.write(f'{token.text} {token.forms[0].grams[0]}\n')
+                        
+    # делим датасет на test и train
+    last_train = ((80 * num_lines) // 100) - 1 
 
-# делим датасет на test и train
-num_lines = 0
-with open('pos_data.txt', 'r', encoding="utf8") as f:
-    for line in f:
-        num_lines += 1
-        
-last_train = ((80 * num_lines) // 100) - 1
-print(last_train)
+    with open('pos_data.txt', 'r', encoding="utf8") as f:
+        for count, line in enumerate(f):
+            if count <= last_train:
+                with open('pos_data_train.txt', 'a', encoding="utf8") as train:
+                    train.write(line)
+            else:
+                with open('pos_data_test.txt', 'a', encoding="utf8") as test:
+                    test.write(line)
+    return
 
-with open('pos_data.txt', 'r', encoding="utf8") as f:
-    for count, line in enumerate(f):
-        if count <= last_train:
-            with open('pos_data_train.txt', 'a', encoding="utf8") as train:
-                train.writelines(line)
-        else:
-            with open('pos_data_test.txt', 'a', encoding="utf8") as test:
-                test.writelines(line)
+# создаем словарь test_tagged с правильной разметкой test и сет test_raw с уникальными словами из test без разметки
+# изначально это делалось одновременно с делением на test/train, но возникли проблемы с доступом к переменным
+def prepare_test(test_file):
+    test_tagged = {}
+    test_raw = set()
+    with open(test_file, 'r', encoding = "utf8") as test:
+        for line in test:
+            splitted = line.split()
+            word = splitted[0]
+            tag = splitted[1]
+            test_tagged[word] = tag
+            test_raw.add(word)
+    return test_tagged, test_raw
+    
+# нужно, т.к. с lambda не работает pickle
+def instead_of_lambda():
+    return defaultdict(int)
 
-# начинается сам анализатор
 class UnigramMorphAnalyzer:
-    def __init__(self):
+    def __init__(self, model=None):
+        model = defaultdict(instead_of_lambda)
         pass
     
-    def train(self, train_corp):
-        """
-        (file) -> defaultdict
-        Получает на вход обучающую выборку (файл) и возвращает словарь того формата, который
-        указан в задании. В дальнейшем этот словарь используется только для
-        вывода частеречной статистики по указанному окончанию.
-        """
-        model = defaultdict(lambda: defaultdict(int))    
-        last = ""                                                          
-        with open(train_corp, 'r', encoding="utf-8") as train:
-            for line in train:
-                splitted = line.split()
-                for i in range(-1, -5, -1):
-                    if splitted[0].lower()[i:] != last:                     # last нужен, чтобы не засчитывать по несколько
-                        model[splitted[0].lower()[i:]][splitted[1]] += 1    # раз слова короче 4 символов
-                    last = splitted[0].lower()[i:]
-        return model
+    def __getitem__(self, item):
+        return self.model[item]
     
-    def reverse_train(self, train_corp):
+    def train(self, word, tag):
         """
-        (file) -> defaultdict
-        Получает на вход обучающую выборку (файл) и возвращает словарь вида {'pos_tag': {'й': 22, 'ий':15}},
-        где перечислены все части речи из выборки. В дальнейшем предсказании используется именно этот словарь.
+        (str, str) -> defaultdict
+        Получает на вход слово и тег и сохраняет информацию о статистике по окончаниям в модель.
+        Сохраняет модель как атрибут.
         """
-        model = defaultdict(lambda: defaultdict(int))  
-        last = ""                                         
-        with open(train_corp, 'r', encoding="utf-8") as train:   
-            for line in train:                                              
-                splitted = line.split()
-                for i in range(-1, -5, -1):
-                    if splitted[0].lower()[i:] != last:
-                        model[splitted[1]][splitted[0].lower()[i:]] += 1
-                    last = splitted[0].lower()[i:]
-        return model
+        # model объявляется как пустой словарь только в том случае, если там еще ничего нет
+        try:
+            model = self.model
+        except AttributeError:
+            model = defaultdict(instead_of_lambda)
+        # проверка на длину нужна, т.к. иначе короткие слова засчитываются по несколько раз
+        # например, "вий" - "NOUN" было в корпусе 1 раз, но засчиталось бы как 2, т.к. всегда 4 прохода
+        num = -5
+        if len(word) < 4:
+            num = (len(word)*(-1)) - 1
+        for i in range(-1, num, -1):
+            model[word[i:]][tag] += 1
+        self.model = model
+        return
     
-    def tag_list(self, train_corp): 
+    def predict(self, word):
         """
-        (file) -> list
-        Получает на вход обучающую выборку (файл) и возвращает список всех частеречных тегов оттуда.
-        Длина полученного списка равна числу строк в файле.
+        (str) -> str
+        Получает на вход слово и предсказывает часть речи
         """
-        full_list = []
-        with open(train_corp, 'r', encoding="utf-8") as train:
-            for line in train:
-                splitted = line.split()
-                full_list.append(splitted[1])
-        return full_list
-  
-    def tag_probability(self, tag_list, tag):
-        """
-        (list, str) -> float
-        Получает на вход полный список тегов и тег, для которого необходимо вычислить вероятность. 
-        Делит число вхождений данного тега в список на длину списка. 
-        Возвращает полученное значение вероятности для данного тега.
-        """
-        len_tag_list = len(tag_list)
-        assert tag in tag_list
-        tag_prob = tag_list.count(tag) / len_tag_list
-        return tag_prob
-    
-    def all_tag_probs(self, tag_list):
-        """
-        (list) -> dict
-        Получает на вход полный список тегов и возвращает значение вероятности для каждого из них
-        в формате {'NOUN': 0.37425614781661115}
-        """
-        result = {}
-        tag_set = set(tag_list)
-        for tag in tag_set:
-            result[tag] = UnigramMorphAnalyzer.tag_probability(self, tag_list, tag)
+        num = -4
+        while word[num:] not in self.model:
+            num = num + 1
+            # нужно для случаев, когда окончания нет в словаре
+            if num > -1:
+                 return 'UNKN'              
+        affix = self.model[word[num:]]
+        final_list = sorted(affix, key=affix.get, reverse=True)
+        result = final_list[0]
         return result
-              
-    def char_probability(self, char, tag, rev_model, tag_list):
-        """
-        (str, str, defaultdict, list) -> float
-        Получает на вход один или несколько символов, частеречный тег, словарь, полученный при обучении reverse_train
-        и полный список тегов. Затем вычисляет вероятность встретить данное сочетание символов с данным тегом.
-        В числителе - сколько раз встретилось данное окончание с данным тегом. 
-        В знаменателе - общее число окончаний с данным тегом.
-        Возвращает значение вероятности, полученное при делении.
-        """
-        num = rev_model[tag][char]
-        denom = len(rev_model[tag])                               
-        return (num / denom) * len(char)              # *len(char) - самый примитивный способ назначить веса ever
     
-    def predict(self, word, rev_model, tag_list, all_tag_probs):
+    def evaluate(self, test_file):
         """
-        (str, defaultdict, list, dict{str: float}) -> str
-        Получает на вход слово, модель, обученную при reverse_train, полный список тегов и список
-        вероятностей всех тегов.
-        Поочередно для каждого тега вычисляет вероятность встретить один, два, три и четыре последних
-        символа с этим тегом и перемножает их. Полученное произведение умножает на вероятность самого
-        тега, результат вносит в словарь tag_probs. Затем возвращает тег с максимальным значением из
-        tag_probs.
+        (dict, set) -> float
+        Получает на вход размеченную тестовую выборку, и набор уникальных слов оттуда, 
+        размечает их самостоятельно, затем сравнивает свой результат (predicted) 
+        с правильными ответами (test_tagged) и возвращает точность в процентах.
         """
-        tags_and_probs = {}                                       
-        for tag in rev_model:
-            last = ""
-            prob = 1
-            tag_prob = all_tag_probs[tag]
-            for i in range(-1, -5, -1):
-                char = word[i:]
-                if char != last:
-                    prob = prob * UnigramMorphAnalyzer.char_probability(self, char, tag, rev_model, tag_list)
-                last = word[i:]                          # было внутри if, но вроде должно быть вне (кажется, работает и так, и так)
-            tags_and_probs[tag] = prob * tag_prob
-#         for w in sorted(tags_and_probs, key=tags_and_probs.get, reverse=True):         # это если нужно вывести вероятности всех тегов
-#               print(w, tags_and_probs[w])               
-        result = max(tags_and_probs, key=tags_and_probs.get)
-        return result 
-        
-    def evaluate(self, test_corp, rev_model, tag_list, all_tag_probs):
-        """
-        (file, defaultdict, list, dict{str: float}) -> float
-        Получает на вход тестовую выборку (файл), модель, обученную reverse_train, полный список тегов
-        и словарь со значением вероятности для каждого тега. 
-        Создает словарь correct формата {'сегодня': ADVB} с правильными ответами.
-        Затем размечает тестовую выборку самостоятельно, сохраняя результаты в словарь system того же формата.
-        Ключи в словарях correct и system сравниваются, в словарь diff записывается то, что не совпало.
-        Затем вычисляется точность: число верных ответов системы делится на общее число ответов
-        (оно же - число уникальных слов в тестовой выборке).
-        """
-        correct = {}
-        system = {}
-        
-        with open(test_corp, 'r', encoding="utf-8") as f:
-            for line in f:
-                splitted = line.split()
-                word = splitted[0]
-                tag = splitted[1]
-                correct[word] = tag
-            
-        with open(test_corp, 'r', encoding="utf-8") as f:
-            for line in f:
-                splitted = line.split()
-                word = splitted[0]
-                prediction = UnigramMorphAnalyzer.predict(self, word, rev_model, tag_list, all_tag_probs)
-                system[word] = prediction
-                
-        diff = {k: v for k, v in system.items() if correct[k] != system[k]}
-        corr_ans = len(system) - len(diff)
-        presicion = (corr_ans / len(system)) * 100
-        return presicion, diff
-
-    # несколько функций недописаны, т.к. хотела сначала разобраться со всем, что выше.
+        tagged_and_raw = prepare_test(test_file)
+        test_tagged = tagged_and_raw[0]
+        test_raw = tagged_and_raw[1]
+        predicted = {}
+        for word in test_raw:
+            prediction = UnigramMorphAnalyzer.predict(self, word)
+            predicted[word] = prediction
+        errors = {k: v for k, v in predicted.items() if test_tagged[k] != predicted[k]}
+        total_num_words = len(test_raw)
+        num_errors = len(errors)
+        num_corr = total_num_words - num_errors
+        precision = (num_corr / total_num_words) * 100
+        return precision
     
     def save(self):
-        pass
+        pickle.dump(self.model, open("pos_model.p", "wb"))
+        return
     
-    def load(self):
-        pass
-    
-# обучение
-an = UnigramMorphAnalyzer()
-rev_mod = an.reverse_train('pos_data_train.txt')
-tag_list = an.tag_list('pos_data_train.txt')
-tag_probs = an.all_tag_probs(tag_list)
-
+    def load(self, model_file):
+        self.model = pickle.load(open(model_file, "rb"))
+        return        
