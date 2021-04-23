@@ -74,10 +74,6 @@ class RandomGenerator:
     
                 
     def generate(self):
-        if self.combs:
-            return random.choice(self.combs)
-        else:
-            # если RandomGenerator.make_combs не было запущено раньше и среди атрибутов нет списка словосочетаний,
-            # то RandomGenerator.make_combs запустится внутри RandomGenerator.generate
+        if not self.combs:
             RandomGenerator.make_combs(self)
-            return random.choice(self.combs)
+        return random.choice(self.combs)
