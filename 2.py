@@ -4,7 +4,8 @@ class ReverseIter:
         self.i = -1
         
     def __iter__(self):
-        pass
+        i = self.nums[0]
+        return self
     
     def __next__(self):
         stop = (-1) * (len(self.nums))
