@@ -69,9 +69,7 @@ class RandomGenerator:
 
             final_combs.append(f"{final_adj} {final_noun}")
             
-        self.combs = final_combs            
-        return
-    
+        self.combs = final_combs                
                 
     def generate(self):
         if not self.combs:
