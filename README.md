@@ -1,7 +1,7 @@
 ## Задание: собрать собственный новостной корпус.
 
-Мой корпус (Фонтанка):
-https://drive.google.com/file/d/1IGsifcsl8GkZuNX6MwCCF6t7t9WZh0Mw/view?usp=sharing
+> Мой корпус (Фонтанка):
+> https://drive.google.com/file/d/1IGsifcsl8GkZuNX6MwCCF6t7t9WZh0Mw/view?usp=sharing
 
 Для этого вам нужно:
 
